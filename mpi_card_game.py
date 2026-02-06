@@ -1,12 +1,22 @@
 import math
 import time
 import random
+from enum import Enum
 import mpi4py.MPI as MPI
 
 LIST_SUITS = ["Hearts", "Diamonds", "Spades", "Clubs"]
 LIST_RANKS = ["Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Jack", "Queen", "King", "Ace"]
 DICT_SCORES = {"Two": 2, "Three": 3, "Four": 4, "Five": 5, "Six": 6, "Seven": 7, "Eight": 8, "Nine": 9, "Ten": 10, "Jack": 11, "Queen": 12, "King": 13, "Ace": 14}
 LIST_NAMES = ["Astohl", "Barst", "Catria", "Draug", "Est", "Fergus", "Gotoh", "Hector", "Ike", "Jeorge", "Kris", "Leo", "Marth", "Nasir", "Oscar", "Palla", "Quan", "Rickard", "Soren", "Tomas", "Ulki", "Volke", "Wendy", "Xavier", "Yarne", "Zelgius"]
+
+class MPICommCodes(Enum):
+    SEND_CARD = 1
+    START_GAME = 2
+    SEND_PLAYER = 3
+    SEND_TURN = 4
+    DONE_DEALING = 5
+    DONE_PLAYING = 6
+
 
 class Card:
     def __init__(self, rank, suit):
@@ -80,22 +90,22 @@ class Player:
         self.score = 0
 
     def play_game(self):
-        is_playing = self.comm.recv(source=0)
+        comm_code, is_playing = self.comm.recv(source=0)
         while is_playing:
             self.empty_hand()
             self.receive_hand() # IT WORKS
             self.play_round() # IT WORKS
-            is_playing = self.comm.recv(source=0)
-        self.comm.send(self, dest=0)
+            comm_code, is_playing = self.comm.recv(source=0)
+        self.comm.send((MPICommCodes.SEND_PLAYER, self), dest=0)
 
     def receive_hand(self):
         while True:
-            card: Card = self.comm.recv(source=0)
+            comm_code, card = self.comm.recv(source=0)
             if card is not None:
                 self.receive_card(card)
             else:
                 break
-        self.comm.send(self, dest=0)
+        self.comm.send((MPICommCodes.SEND_PLAYER, self), dest=0)
 
     def receive_card(self, card):
         self.hand.append(card)
@@ -113,13 +123,13 @@ class Player:
 
     def play_round(self):
         while True:
-            board_card = self.comm.recv(source=0)
+            comm_code, board_card = self.comm.recv(source=0)
             if board_card is None:
                 break
             board_card, str_action, earned_points, num_remaining, game_ended = self.play_card(board_card)
-            self.comm.send((board_card, str_action, earned_points, num_remaining, game_ended), dest=0)
+            self.comm.send((MPICommCodes.SEND_TURN, (board_card, str_action, earned_points, num_remaining, game_ended)), dest=0)
 
-        self.comm.send(self, dest=0)
+        self.comm.send((MPICommCodes.SEND_PLAYER, self), dest=0)
 
     def play_card(self, board_card: Card):
         played_card = board_card
@@ -163,7 +173,7 @@ class Dealer:
         num_rounds = 0
         while self.can_play_round():
             for process in range(1, self.num_players + 1):
-                self.comm.send(True, process)
+                self.comm.send((MPICommCodes.START_GAME, True), dest=process)
 
             num_rounds = num_rounds + 1
             print(f"Beginning round #{num_rounds}")
@@ -171,7 +181,7 @@ class Dealer:
             self.play_round() # IT ALSO WORKS
 
         for process in range(1, self.num_players + 1):
-            self.comm.send(False, dest=process)
+            self.comm.send((MPICommCodes.START_GAME, False), dest=process)
 
         print(f"There are not enough cards to play another round, the game is over after {num_rounds} rounds! Tallying final results...")
         self.print_player_scores()
@@ -187,10 +197,10 @@ class Dealer:
         for n in range(0, hand_size):
             for process in range(1, self.num_players + 1):
                 card: Card = self.deck_of_cards.draw_card()
-                self.comm.send(card, dest=process)
+                self.comm.send((MPICommCodes.SEND_CARD, card), dest=process)
 
         for process in range(1, self.num_players + 1):
-            self.comm.send(None, dest=process)
+            self.comm.send((MPICommCodes.DONE_DEALING, None), dest=process)
         self.print_player_hands()
 
     def play_round(self):
@@ -208,8 +218,8 @@ class Dealer:
             for process in range(1, self.num_players + 1):
                 player_name = LIST_NAMES[process]
                 print(f"{player_name}'s turn! Current card on the board: {board_card}")
-                self.comm.send(board_card, dest=process)
-                board_card, str_action, earned_points, num_remaining, player_has_won = self.comm.recv(source=process)
+                self.comm.send((MPICommCodes.SEND_CARD, board_card), dest=process)
+                comm_code, (board_card, str_action, earned_points, num_remaining, player_has_won) = self.comm.recv(source=process)
 
                 str_move = f"{player_name} {str_action} {board_card} for {earned_points} points, and has {num_remaining} cards in their hand.\n"
                 print(str_move)
@@ -236,7 +246,7 @@ class Dealer:
                     break
 
         for process in range(1, self.num_players + 1):
-            self.comm.send(None, dest=process)
+            self.comm.send((MPICommCodes.DONE_PLAYING, None), dest=process)
         self.print_player_scores()
 
     def sort_players(self):
@@ -244,13 +254,14 @@ class Dealer:
 
     def print_player_hands(self):
         for process in range(1, self.num_players + 1):
-            player = self.comm.recv(source=process)
+            comm_code, player = self.comm.recv(source=process)
             print(player)
 
     def print_player_scores(self):
         list_players = []
         for process in range(1, self.num_players + 1):
-            list_players.append(self.comm.recv(source=process))
+            comm_code, player = self.comm.recv(source=process)
+            list_players.append(player)
 
         list_players = sorted(list_players, key=lambda player: player.score, reverse=True)
 
