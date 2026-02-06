@@ -38,6 +38,12 @@ class DeckOfCards:
         random.shuffle(self.deck)
         self.current_index = 0
 
+    def get_num_cards_played(self):
+        return self.current_index
+
+    def get_num_cards_unplayed(self):
+        return 52 - self.current_index
+
     @staticmethod
     def create_new_deck():
         deck = []
@@ -67,77 +73,6 @@ class CardGame:
             return None
         return self.played_cards[len(self.played_cards) - 1]
 
-class Dealer:
-    def __init__(self, deck_of_cards, num_players):
-        self.list_players = []
-        self.num_players = num_players
-        self.deck_of_cards = deck_of_cards
-        for i in range(0, num_players):
-            self.list_players.append(Player(name=LIST_NAMES[i]))
-
-    def deal_cards(self):
-        max_size = min(math.floor(51 / self.num_players), 8)
-        min_size = 4
-
-        if max_size <= min_size:
-            raise ValueError("Why are there so many players?")
-
-        hand_size = random.randrange(min_size, max_size)
-
-        for n in range(0, hand_size):
-            for player in self.list_players:
-                player: Player
-                card: Card = self.deck_of_cards.draw_card()
-                player.receive_card(card)
-
-    def play_game(self):
-        # Setup card game and draw first card
-        first_card = self.deck_of_cards.draw_card()
-        card_game = CardGame(first_card)
-        board_card = card_game.get_board_card()
-
-        print("Beginning to play!")
-        # Game loop logic
-        game_ended = False
-        winning_player = None
-        num_passes = 0
-        while not game_ended:
-            for player in self.list_players:
-
-                print(f"{player.name}'s turn! Current card on the board: {board_card}")
-                board_card, str_action, earned_points, num_remaining = player.play_card(board_card)
-                str_move = f"{player.name} {str_action} {board_card} for {earned_points} points, and has {num_remaining} cards in their hand.\n"
-                print(str_move)
-
-                if str_action == "passed on":
-                    drawn_card = self.deck_of_cards.draw_card()
-                    if drawn_card is not None:
-                        player.receive_card(drawn_card)
-                        player.sort_hand()
-                        num_passes = 0
-                    elif num_passes == self.num_players:
-                        print("No one can play, ending game early!")
-                        game_ended = True
-                        break
-                    else:
-                        print(f"Deck is empty, cannot draw new card!")
-                        num_passes = num_passes + 1
-
-                if num_remaining == 0:
-                    winning_player = player
-                    print(f"{winning_player.name} has played their last card, the game is over! Tallying results...")
-                    game_ended = True
-                    break
-                time.sleep(0.2)
-
-        self.sort_players()
-
-        for i, player in enumerate(self.list_players):
-            print(f"Player #{i + 1}: {player.name} with {player.score} points!")
-
-    def sort_players(self):
-        self.list_players = sorted(self.list_players, key=lambda player: player.score, reverse=True)
-
 class Player:
     def __init__(self, name="Leeroy Jenkins"):
         self.name = name
@@ -148,8 +83,14 @@ class Player:
         self.hand.append(card)
         self.sort_hand()
 
+    def empty_hand(self):
+        self.hand.clear()
+
     def sort_hand(self):
         self.hand = sorted(self.hand, key=lambda card: card.score, reverse=True)
+
+    def is_hand_empty(self):
+        return len(self.hand) <= 0
 
     def play_card(self, board_card: Card):
         played_card = board_card
@@ -166,7 +107,7 @@ class Player:
                 num_remaining_cards = len(self.hand)
                 self.score = self.score + card.score
 
-        return played_card, str_action, earned_points, num_remaining_cards
+        return played_card, str_action, earned_points, num_remaining_cards, self.is_hand_empty()
 
     def __str__(self):
         str_hand = f"{self.name}'s Hand: \n"
@@ -174,12 +115,100 @@ class Player:
             str_hand = f"{str_hand}{card}\n"
         return str_hand[:-1]
 
+class Dealer:
+    def __init__(self, deck_of_cards, num_players):
+        self.list_players = []
+        self.num_players = num_players
+        self.deck_of_cards: DeckOfCards = deck_of_cards
+        self.min_size = 4
+        for i in range(0, num_players):
+            self.list_players.append(Player(name=LIST_NAMES[i]))
+
+    def print_player_scores(self):
+        self.sort_players()
+        str_scores = ""
+        for i, player in enumerate(self.list_players):
+            str_scores = f"{str_scores}Player #{i + 1}: {player.name} with {player.score} points!\n"
+        print(str_scores)
+
+    def play_game(self):
+        num_rounds = 0
+        while math.floor((self.deck_of_cards.get_num_cards_unplayed() - 1) / self.num_players) >= self.min_size:
+            num_rounds = num_rounds + 1
+            print(f"Beginning round #{num_rounds}")
+            self.deal_cards()
+            self.play_round()
+        print(f"There are not enough cards to play another round, the game is over after {num_rounds} rounds! Tallying final results...")
+        self.print_player_scores()
+
+    def deal_cards(self):
+        max_size = min(math.floor((self.deck_of_cards.get_num_cards_unplayed() - 1) / self.num_players), 8)
+
+        if max_size < self.min_size:
+            raise ValueError("Why are there so many players?")
+
+        hand_size = random.randrange(self.min_size, max_size + 1)
+
+        print(f"Hand Size: {hand_size}")
+        for player in self.list_players:
+            player.empty_hand()
+
+        for n in range(0, hand_size):
+            for player in self.list_players:
+                player: Player
+                card: Card = self.deck_of_cards.draw_card()
+                player.receive_card(card)
+
+    def play_round(self):
+        # Setup card game and draw first card
+        first_card = self.deck_of_cards.draw_card()
+        card_game = CardGame(first_card)
+        board_card = card_game.get_board_card()
+
+        print(f"Undealt Cards: {self.deck_of_cards.get_num_cards_unplayed()}\n")
+        print("Beginning to play the round!")
+        # Game loop logic
+        game_ended = False
+        num_passes = 0
+        while not game_ended:
+            for player in self.list_players:
+
+                print(f"{player.name}'s turn! Current card on the board: {board_card}")
+                board_card, str_action, earned_points, num_remaining, game_ended = player.play_card(board_card)
+                str_move = f"{player.name} {str_action} {board_card} for {earned_points} points, and has {num_remaining} cards in their hand.\n"
+
+                if str_action == "passed on":
+                    drawn_card = self.deck_of_cards.draw_card()
+                    if drawn_card is not None:
+                        player.receive_card(drawn_card)
+                        str_move = f"{str_move}{player.name} drew the {drawn_card} and added it to their deck!\n"
+                        num_passes = 0
+                    else:
+                        str_move = f"{str_move}Deck is empty, cannot draw new card!\n"
+                        num_passes = num_passes + 1
+                print(str_move)
+
+                if num_passes == self.num_players:
+                    print(f"{str_move}No one can play, ending the round early!\n")
+                    game_ended = True
+                    break
+                if game_ended:
+                    winning_player = player
+                    print(f"{winning_player.name} has played their last card, this round is over! Tallying results for the round...")
+                    game_ended = True
+                    break
+                time.sleep(0.1)
+
+        self.print_player_scores()
+
+    def sort_players(self):
+        self.list_players = sorted(self.list_players, key=lambda player: player.score, reverse=True)
+
 def main():
     num_players = 3
     deck_of_cards = DeckOfCards()
     deck_of_cards.shuffle_deck()
     dealer = Dealer(deck_of_cards=deck_of_cards, num_players=num_players)
-    dealer.deal_cards()
     dealer.play_game()
 
 main()
